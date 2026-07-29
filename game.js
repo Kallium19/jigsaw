@@ -831,6 +831,14 @@ function updateZoomDisplay() {
 
 // Render loop for canvas
 function render(canvas, ctx) {
+    // If game screen is not active or image is not loaded yet, skip rendering to prevent crashes
+    if (gameState.screen !== 'game' || !gameState.originalImage) {
+        ctx.fillStyle = '#0a0c12';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        requestAnimationFrame(() => render(canvas, ctx));
+        return;
+    }
+
     // Clear screen
     ctx.fillStyle = '#0a0c12';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
