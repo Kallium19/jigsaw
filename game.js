@@ -3,8 +3,8 @@
    ========================================================================== */
 
 // Game Constants
-const BOARD_WIDTH = 3200;
-const BOARD_HEIGHT = 2000;
+const BOARD_WIDTH = 2400;
+const BOARD_HEIGHT = 1600;
 const SNAP_THRESHOLD = 20; // Pixels
 const MAX_ZOOM = 3.0;
 const MIN_ZOOM = 0.3;
@@ -806,11 +806,11 @@ function fitPuzzleToViewport() {
     const cw = container.clientWidth;
     const ch = container.clientHeight;
     
-    // Fit target bounds in center
-    const w = gameState.imageWidth;
-    const h = gameState.imageHeight;
+    // Fit the active board bounds containing scattered pieces
+    const w = BOARD_WIDTH;
+    const h = BOARD_HEIGHT;
     
-    const margin = 80;
+    const margin = 40;
     const scaleX = (cw - margin) / w;
     const scaleY = (ch - margin) / h;
     const bestZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(scaleX, scaleY)));
