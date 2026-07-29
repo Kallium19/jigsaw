@@ -1005,8 +1005,6 @@ function startGame() {
     }, 1000);
 }
 
-}
-
 // Helper to send message to connected Peer
 function sendPeerMessage(msg) {
     if (gameState.conn && gameState.conn.open) {
