@@ -258,7 +258,7 @@ button {
 /* Image Selection Gallery */
 .image-gallery {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(7, 1fr);
     gap: 12px;
 }
 
@@ -291,11 +291,13 @@ button {
     background-position: center;
 }
 
-/* Specific Gradients */
+/* Specific Gradients & Backgrounds */
 .aurora-gradient { background: var(--gradient-aurora); }
 .nebula-gradient { background: var(--gradient-nebula); }
 .cyber-gradient { background: var(--gradient-cyber); }
 .forest-gradient { background: var(--gradient-forest); }
+.lake-preview { background-image: url('https://picsum.photos/id/1015/200/150'); }
+.random-preview { background-image: url('https://picsum.photos/id/1018/200/150'); }
 
 .upload-preview {
     background: rgba(255, 255, 255, 0.05);
