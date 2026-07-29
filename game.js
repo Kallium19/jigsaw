@@ -974,6 +974,109 @@ function startGame() {
     }, 1000);
 }
 
+// Start the puzzle assembly with current gameState configurations
+function startPuzzleWithSettings() {
+    const difficultyGrids = {
+        1: { cols: 4, rows: 3 },  // 12
+        2: { cols: 6, rows: 4 },  // 24
+        3: { cols: 8, rows: 6 },  // 48
+        4: { cols: 12, rows: 8 }, // 96
+        5: { cols: 15, rows: 10 } // 150
+    };
+    
+    gameState.cols = difficultyGrids[gameState.difficulty].cols;
+    gameState.rows = difficultyGrids[gameState.difficulty].rows;
+    
+    const img = new Image();
+    img.onload = () => {
+        gameState.originalImage = img;
+        
+        const maxW = 1000;
+        const maxH = 680;
+        let finalW = img.width;
+        let finalH = img.height;
+        
+        const ratio = img.width / img.height;
+        if (finalW > maxW) {
+            finalW = maxW;
+            finalH = finalW / ratio;
+        }
+        if (finalH > maxH) {
+            finalH = maxH;
+            finalW = finalH * ratio;
+        }
+        
+        gameState.imageWidth = finalW;
+        gameState.imageHeight = finalH;
+        
+        document.getElementById('preview-img').src = img.src;
+        
+        initPuzzlePieces();
+        startGame();
+    };
+    
+    if (gameState.imageType === 'procedural') {
+        img.src = generateProceduralImage(gameState.imageValue, 1200, 800);
+    } else if (gameState.imageType === 'picsum') {
+        img.crossOrigin = "anonymous";
+        if (gameState.imageValue === 'lake') {
+            img.src = "https://picsum.photos/id/1015/1200/800";
+        } else if (gameState.imageValue.startsWith('http')) {
+            img.src = gameState.imageValue;
+        } else {
+            img.src = "https://picsum.photos/1200/800?sig=" + Math.floor(Math.random() * 1000000);
+        }
+    } else {
+        img.src = gameState.imageValue;
+    }
+}
+
+// Parse URL query parameters to load shared puzzles
+function parseURLParameters() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('image') || params.has('img')) {
+        const imgVal = params.get('image') || params.get('img');
+        
+        if (['aurora', 'nebula', 'cyber', 'forest'].includes(imgVal)) {
+            gameState.imageType = 'procedural';
+            gameState.imageValue = imgVal;
+        } else if (['lake', 'random'].includes(imgVal)) {
+            gameState.imageType = 'picsum';
+            gameState.imageValue = imgVal;
+        } else if (imgVal.startsWith('http')) {
+            gameState.imageType = 'picsum';
+            gameState.imageValue = imgVal;
+        }
+        
+        if (params.has('diff')) {
+            const d = parseInt(params.get('diff'));
+            if (d >= 1 && d <= 5) gameState.difficulty = d;
+        }
+        if (params.has('rot')) {
+            gameState.allowRotation = params.get('rot') === '1' || params.get('rot') === 'true';
+        }
+        if (params.has('guide')) {
+            gameState.showGuide = params.get('guide') === '1' || params.get('guide') === 'true';
+        }
+        
+        const diffSlider = document.getElementById('difficulty-slider');
+        if (diffSlider) {
+            diffSlider.value = gameState.difficulty;
+            const diffLabels = document.querySelectorAll('.difficulty-labels .label');
+            diffLabels.forEach(l => {
+                if (l.dataset.val == gameState.difficulty) l.classList.add('active');
+                else l.classList.remove('active');
+            });
+        }
+        const rotToggle = document.getElementById('rotation-toggle');
+        if (rotToggle) rotToggle.checked = gameState.allowRotation;
+        const guideToggle = document.getElementById('guide-toggle');
+        if (guideToggle) guideToggle.checked = gameState.showGuide;
+        
+        startPuzzleWithSettings();
+    }
+}
+
 /* ==========================================================================
    UI Event Bindings & Initialization
    ========================================================================== */
@@ -1066,72 +1169,13 @@ window.addEventListener('DOMContentLoaded', () => {
     
     // Assemble/Start Puzzle click
     document.getElementById('start-game-btn').addEventListener('click', () => {
-        // Read difficulty properties
         const diffVal = parseInt(difficultySlider.value);
         gameState.difficulty = diffVal;
-        
-        // Define pieces count grids: cols x rows
-        const difficultyGrids = {
-            1: { cols: 4, rows: 3 },  // 12
-            2: { cols: 6, rows: 4 },  // 24
-            3: { cols: 8, rows: 6 },  // 48
-            4: { cols: 12, rows: 8 }, // 96
-            5: { cols: 15, rows: 10 } // 150
-        };
-        
-        gameState.cols = difficultyGrids[diffVal].cols;
-        gameState.rows = difficultyGrids[diffVal].rows;
-        
-        // Setup options switches
         gameState.allowRotation = document.getElementById('rotation-toggle').checked;
         gameState.soundEnabled = document.getElementById('sound-toggle').checked;
         gameState.showGuide = document.getElementById('guide-toggle').checked;
         
-        // Load the image source
-        const img = new Image();
-        img.onload = () => {
-            gameState.originalImage = img;
-            
-            // Adjust canvas sizing to match aspect ratio
-            const maxW = 1000;
-            const maxH = 680;
-            let finalW = img.width;
-            let finalH = img.height;
-            
-            // scale down if image size is huge
-            const ratio = img.width / img.height;
-            if (finalW > maxW) {
-                finalW = maxW;
-                finalH = finalW / ratio;
-            }
-            if (finalH > maxH) {
-                finalH = maxH;
-                finalW = finalH * ratio;
-            }
-            
-            gameState.imageWidth = finalW;
-            gameState.imageHeight = finalH;
-            
-            // Populate preview panel elements
-            document.getElementById('preview-img').src = img.src;
-            
-            // Cut and setup pieces
-            initPuzzlePieces();
-            startGame();
-        };
-        
-        if (gameState.imageType === 'procedural') {
-            img.src = generateProceduralImage(gameState.imageValue, 1200, 800);
-        } else if (gameState.imageType === 'picsum') {
-            img.crossOrigin = "anonymous";
-            if (gameState.imageValue === 'lake') {
-                img.src = "https://picsum.photos/id/1015/1200/800";
-            } else {
-                img.src = "https://picsum.photos/1200/800?sig=" + Math.floor(Math.random() * 1000000);
-            }
-        } else {
-            img.src = gameState.imageValue;
-        }
+        startPuzzleWithSettings();
     });
     
     // Viewport mouse interactions (Dragging, rotating, panning)
@@ -1341,4 +1385,35 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('solve-cheat-btn').addEventListener('click', () => {
         cheatSolve();
     });
+    
+    // HUD Share Link Copy
+    const shareBtn = document.getElementById('share-btn');
+    if (shareBtn) {
+        shareBtn.addEventListener('click', () => {
+            const shareUrl = window.location.origin + window.location.pathname + 
+                '?image=' + encodeURIComponent(gameState.imageValue) + 
+                '&diff=' + gameState.difficulty + 
+                '&rot=' + (gameState.allowRotation ? '1' : '0') + 
+                '&guide=' + (gameState.showGuide ? '1' : '0');
+            
+            navigator.clipboard.writeText(shareUrl).then(() => {
+                const span = shareBtn.querySelector('span');
+                const originalText = span.innerText;
+                span.innerText = 'Copied!';
+                shareBtn.style.backgroundColor = 'rgba(16, 185, 129, 0.4)';
+                shareBtn.style.borderColor = '#10b981';
+                
+                setTimeout(() => {
+                    span.innerText = originalText;
+                    shareBtn.style.backgroundColor = '';
+                    shareBtn.style.borderColor = '';
+                }, 2000);
+            }).catch(err => {
+                alert("Failed to copy link: " + err);
+            });
+        });
+    }
+
+    // Auto-parse URL parameters on load
+    parseURLParameters();
 });
