@@ -24,6 +24,14 @@ let gameState = {
     imageWidth: 900,
     imageHeight: 600,
     
+    // Multiplayer State
+    isMultiplayer: false,
+    role: null,                // 'host' or 'guest'
+    peer: null,                // Peer instance
+    conn: null,                // Connection instance
+    partnerCursor: { x: 0, y: 0, active: false },
+    partnerName: 'My Love',
+    
     // Viewport & Pan/Zoom
     zoom: 1.0,
     panX: 0,
@@ -465,7 +473,8 @@ function initPuzzlePieces() {
                 padding: padding,
                 w: w,
                 h: h,
-                isLocked: false
+                isLocked: false,
+                isLockedByPartner: false
             };
             
             // Render piece offscreen canvas
@@ -910,6 +919,28 @@ function render(canvas, ctx) {
     drawPieceList(freePieces);
     drawPieceList(draggedPieces);
     
+    // DRAW PARTNER CURSOR
+    if (gameState.isMultiplayer && gameState.partnerCursor.active) {
+        ctx.save();
+        ctx.translate(gameState.partnerCursor.x, gameState.partnerCursor.y);
+        
+        ctx.shadowColor = '#f43f5e';
+        ctx.shadowBlur = 15;
+        
+        ctx.font = '24px "Plus Jakarta Sans"';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        ctx.fillText('ðŸ’–', 0, 0);
+        
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.font = 'bold 11px "Plus Jakarta Sans"';
+        ctx.fillText(gameState.partnerName, 0, 22);
+        
+        ctx.restore();
+    }
+    
     ctx.restore();
     
     // Draw particles explosion overlay (directly in screen coordinates)
@@ -974,8 +1005,317 @@ function startGame() {
     }, 1000);
 }
 
+}
+
+// Helper to send message to connected Peer
+function sendPeerMessage(msg) {
+    if (gameState.conn && gameState.conn.open) {
+        gameState.conn.send(msg);
+    }
+}
+
+// Throttle cursor updates to reduce bandwidth usage
+let lastCursorSendTime = 0;
+function syncCursorPosition(bx, by) {
+    if (!gameState.isMultiplayer) return;
+    const now = Date.now();
+    if (now - lastCursorSendTime > 40) { // 25 updates per second
+        sendPeerMessage({ type: 'cursor', x: bx, y: by });
+        lastCursorSendTime = now;
+    }
+}
+
+// Initialize PeerJS Host Connection
+function initMultiplayerHost() {
+    gameState.isMultiplayer = true;
+    gameState.role = 'host';
+    
+    // Show waiting modal
+    const coopModal = document.getElementById('coop-modal');
+    const coopUrlBox = document.getElementById('coop-share-url');
+    const loaderText = document.getElementById('coop-loader-text');
+    
+    coopModal.classList.remove('hidden');
+    loaderText.innerText = "Creating secure WebRTC connection room...";
+    coopUrlBox.value = "";
+    
+    // Construct PeerJS connection
+    const peer = new Peer(null, {
+        debug: 1
+    });
+    gameState.peer = peer;
+    
+    peer.on('open', (id) => {
+        // Construct share link (force rotation to false)
+        const shareUrl = window.location.origin + window.location.pathname + 
+            '?room=' + id + 
+            '&image=' + encodeURIComponent(gameState.imageValue) + 
+            '&diff=' + gameState.difficulty + 
+            '&rot=0' + 
+            '&guide=' + (gameState.showGuide ? '1' : '0');
+        
+        coopUrlBox.value = shareUrl;
+        loaderText.innerText = "Waiting for your partner to join...";
+    });
+    
+    peer.on('connection', (conn) => {
+        gameState.conn = conn;
+        setupNetworkConnection(conn);
+    });
+    
+    peer.on('error', (err) => {
+        console.error("PeerJS Host Error:", err);
+        alert("Connection room error: " + err.message);
+        cancelMultiplayerSession();
+    });
+}
+
+// Initialize PeerJS Guest Connection
+function initMultiplayerGuest(roomId) {
+    gameState.isMultiplayer = true;
+    gameState.role = 'guest';
+    
+    const joiningOverlay = document.getElementById('joining-overlay');
+    const statusText = document.getElementById('joining-overlay-status');
+    
+    joiningOverlay.classList.remove('hidden');
+    statusText.innerText = "Connecting to partner's host server...";
+    
+    const peer = new Peer(null, {
+        debug: 1
+    });
+    gameState.peer = peer;
+    
+    peer.on('open', () => {
+        statusText.innerText = "Connecting to room: " + roomId + "...";
+        const conn = peer.connect(roomId);
+        gameState.conn = conn;
+        setupNetworkConnection(conn);
+    });
+    
+    peer.on('error', (err) => {
+        console.error("PeerJS Guest Error:", err);
+        alert("Failed to join room: " + err.message);
+        window.location.search = ""; // Reload without query params to return to setup
+    });
+}
+
+// Setup events for open data connection
+function setupNetworkConnection(conn) {
+    conn.on('open', () => {
+        console.log("P2P WebRTC Connection opened successfully!");
+        
+        // Hide modals/overlays
+        document.getElementById('coop-modal').classList.add('hidden');
+        document.getElementById('joining-overlay').classList.add('hidden');
+        
+        // Show status tag in game
+        const coopStatus = document.getElementById('coop-status');
+        const statusText = document.getElementById('coop-status-text');
+        const coopDividers = document.querySelectorAll('.coop-only');
+        
+        coopStatus.classList.remove('hidden');
+        statusText.innerText = "Connected to partner";
+        coopDividers.forEach(el => el.classList.remove('hidden'));
+        
+        if (gameState.role === 'host') {
+            // Host sends the initial puzzle state
+            startPuzzleWithSettings();
+            
+            setTimeout(() => {
+                const piecesData = gameState.pieces.map(p => ({
+                    id: p.id,
+                    x: p.x,
+                    y: p.y,
+                    rotation: p.rotation,
+                    isLocked: p.isLocked
+                }));
+                sendPeerMessage({
+                    type: 'init_board',
+                    pieces: piecesData
+                });
+            }, 1000);
+        }
+    });
+    
+    conn.on('data', (data) => {
+        handleNetworkMessage(data);
+    });
+    
+    conn.on('close', () => {
+        console.log("P2P Connection closed by partner.");
+        alert("Your partner has disconnected.");
+        cancelMultiplayerSession();
+    });
+}
+
+// Clean up multiplayer session and go back to menu
+function cancelMultiplayerSession() {
+    if (gameState.conn) gameState.conn.close();
+    if (gameState.peer) gameState.peer.destroy();
+    
+    gameState.isMultiplayer = false;
+    gameState.role = null;
+    gameState.peer = null;
+    gameState.conn = null;
+    gameState.partnerCursor.active = false;
+    
+    // Hide UI elements
+    document.getElementById('coop-modal').classList.add('hidden');
+    document.getElementById('joining-overlay').classList.add('hidden');
+    document.getElementById('coop-status').classList.add('hidden');
+    document.querySelectorAll('.coop-only').forEach(el => el.classList.add('hidden'));
+    
+    // Exit game back to menu if active
+    clearInterval(gameState.timerInterval);
+    gameState.screen = 'setup';
+    document.getElementById('game-screen').classList.remove('active');
+    document.getElementById('setup-screen').classList.add('active');
+}
+
+// Handler for all network co-op packages
+function handleNetworkMessage(data) {
+    if (!data || !data.type) return;
+    
+    switch (data.type) {
+        case 'init_board':
+            // Guest receives board pieces initialization from Host
+            startPuzzleWithSettings();
+            
+            setTimeout(() => {
+                data.pieces.forEach(pData => {
+                    const p = gameState.pieces.find(item => item.id === pData.id);
+                    if (p) {
+                        p.x = pData.x;
+                        p.y = pData.y;
+                        p.rotation = pData.rotation;
+                        p.isLocked = pData.isLocked;
+                    }
+                });
+                reconstructGroups();
+                updateHUDProgress();
+            }, 1000);
+            break;
+            
+        case 'cursor':
+            gameState.partnerCursor.x = data.x;
+            gameState.partnerCursor.y = data.y;
+            gameState.partnerCursor.active = true;
+            break;
+            
+        case 'lock':
+            const lockPiece = gameState.pieces.find(item => item.id === data.pieceId);
+            if (lockPiece) {
+                lockPiece.group.forEach(item => {
+                    item.isLockedByPartner = true;
+                });
+            }
+            break;
+            
+        case 'release':
+            const releasePiece = gameState.pieces.find(item => item.id === data.pieceId);
+            if (releasePiece) {
+                releasePiece.group.forEach(item => {
+                    item.isLockedByPartner = false;
+                });
+            }
+            break;
+            
+        case 'sync_pieces':
+            data.pieces.forEach(pData => {
+                const p = gameState.pieces.find(item => item.id === pData.id);
+                if (p) {
+                    p.x = pData.x;
+                    p.y = pData.y;
+                    p.rotation = pData.rotation;
+                    p.isLocked = pData.isLocked;
+                }
+            });
+            reconstructGroups();
+            updateHUDProgress();
+            break;
+            
+        case 'play_sound':
+            playSnapSound();
+            break;
+    }
+}
+
+// Helper to reconstruct piece groupings from scratch
+function reconstructGroups() {
+    gameState.pieces.forEach(p => {
+        p.group = [p];
+    });
+    
+    if (gameState.pieces.length === 0) return;
+    const w = gameState.pieces[0].w;
+    const h = gameState.pieces[0].h;
+    
+    for (let i = 0; i < gameState.pieces.length; i++) {
+        const p1 = gameState.pieces[i];
+        
+        if (p1.isLocked) {
+            const masterLocked = gameState.pieces.filter(item => item.isLocked && item !== p1);
+            if (masterLocked.length > 0) {
+                const lockedGroup = masterLocked[0].group;
+                if (!lockedGroup.includes(p1)) {
+                    lockedGroup.push(p1);
+                    p1.group = lockedGroup;
+                }
+            }
+            continue;
+        }
+        
+        const neighbors = [
+            { col: p1.col + 1, row: p1.row }, // Right
+            { col: p1.col,     row: p1.row + 1 }  // Down
+        ];
+        
+        neighbors.forEach(n => {
+            if (n.col >= gameState.cols || n.row >= gameState.rows) return;
+            const p2 = gameState.pieces.find(item => item.col === n.col && item.row === n.row);
+            
+            if (!p2 || p1.group === p2.group) return;
+            
+            const relSolvedX = p2.targetX - p1.targetX;
+            const relSolvedY = p2.targetY - p1.targetY;
+            
+            let rx = relSolvedX;
+            let ry = relSolvedY;
+            const theta = p1.rotation;
+            if (theta === 90) {
+                rx = -relSolvedY;
+                ry = relSolvedX;
+            } else if (theta === 180) {
+                rx = -relSolvedX;
+                ry = -relSolvedY;
+            } else if (theta === 270) {
+                rx = relSolvedY;
+                ry = -relSolvedX;
+            }
+            
+            const actualDx = p2.x - p1.x;
+            const actualDy = p2.y - p1.y;
+            
+            if (Math.abs(actualDx - rx) < 1.5 && Math.abs(actualDy - ry) < 1.5 && p1.rotation === p2.rotation) {
+                const group1 = p1.group;
+                const group2 = p2.group;
+                
+                group2.forEach(item => {
+                    if (!group1.includes(item)) {
+                        group1.push(item);
+                        item.group = group1;
+                    }
+                });
+            }
+        });
+    }
+}
+
 // Start the puzzle assembly with current gameState configurations
 function startPuzzleWithSettings() {
+    gameState.allowRotation = false; // Disable piece rotation entirely!
+    
     const difficultyGrids = {
         1: { cols: 4, rows: 3 },  // 12
         2: { cols: 6, rows: 4 },  // 24
@@ -1053,7 +1393,8 @@ function parseURLParameters() {
             if (d >= 1 && d <= 5) gameState.difficulty = d;
         }
         if (params.has('rot')) {
-            gameState.allowRotation = params.get('rot') === '1' || params.get('rot') === 'true';
+            // Keep rotation false as requested
+            gameState.allowRotation = false;
         }
         if (params.has('guide')) {
             gameState.showGuide = params.get('guide') === '1' || params.get('guide') === 'true';
@@ -1069,11 +1410,16 @@ function parseURLParameters() {
             });
         }
         const rotToggle = document.getElementById('rotation-toggle');
-        if (rotToggle) rotToggle.checked = gameState.allowRotation;
+        if (rotToggle) rotToggle.checked = false;
         const guideToggle = document.getElementById('guide-toggle');
         if (guideToggle) guideToggle.checked = gameState.showGuide;
         
-        startPuzzleWithSettings();
+        // Check if room guest auto join
+        if (params.has('room')) {
+            initMultiplayerGuest(params.get('room'));
+        } else {
+            startPuzzleWithSettings();
+        }
     }
 }
 
@@ -1167,16 +1513,60 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     });
     
-    // Assemble/Start Puzzle click
+    // Assemble/Start Puzzle click (Solo)
     document.getElementById('start-game-btn').addEventListener('click', () => {
         const diffVal = parseInt(difficultySlider.value);
         gameState.difficulty = diffVal;
-        gameState.allowRotation = document.getElementById('rotation-toggle').checked;
+        gameState.allowRotation = false; // force disable rotation
         gameState.soundEnabled = document.getElementById('sound-toggle').checked;
         gameState.showGuide = document.getElementById('guide-toggle').checked;
         
         startPuzzleWithSettings();
     });
+
+    // Start Co-Op Room click
+    const startCoopBtn = document.getElementById('start-coop-btn');
+    if (startCoopBtn) {
+        startCoopBtn.addEventListener('click', () => {
+            const diffVal = parseInt(difficultySlider.value);
+            gameState.difficulty = diffVal;
+            gameState.allowRotation = false; // force disable rotation
+            gameState.soundEnabled = document.getElementById('sound-toggle').checked;
+            gameState.showGuide = document.getElementById('guide-toggle').checked;
+            
+            initMultiplayerHost();
+        });
+    }
+    
+    // Copy Co-Op shareable link
+    const copyCoopUrlBtn = document.getElementById('copy-coop-url-btn');
+    if (copyCoopUrlBtn) {
+        copyCoopUrlBtn.addEventListener('click', () => {
+            const urlInput = document.getElementById('coop-share-url');
+            urlInput.select();
+            urlInput.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(urlInput.value).then(() => {
+                const originalText = copyCoopUrlBtn.innerText;
+                copyCoopUrlBtn.innerText = "Copied! ðŸ’–";
+                copyCoopUrlBtn.style.backgroundColor = "#10b981";
+                copyCoopUrlBtn.style.borderColor = "#10b981";
+                
+                setTimeout(() => {
+                    copyCoopUrlBtn.innerText = originalText;
+                    copyCoopUrlBtn.style.backgroundColor = "";
+                    copyCoopUrlBtn.style.borderColor = "";
+                }, 2000);
+            });
+        });
+    }
+    
+    // Cancel Co-Op room creation
+    const cancelCoopBtn = document.getElementById('cancel-coop-btn');
+    if (cancelCoopBtn) {
+        cancelCoopBtn.addEventListener('click', () => {
+            cancelMultiplayerSession();
+        });
+    }
     
     // Viewport mouse interactions (Dragging, rotating, panning)
     canvas.addEventListener('mousedown', (e) => {
@@ -1200,13 +1590,13 @@ window.addEventListener('DOMContentLoaded', () => {
         const clickedPiece = getPieceAtBoardPos(boardCoords.x, boardCoords.y);
         
         if (clickedPiece) {
-            if (clickedPiece.isLocked) {
-                // Locked pieces cannot be moved or rotated, but let's allow panning if click empty space
+            if (clickedPiece.isLocked || clickedPiece.isLockedByPartner) {
+                // Ignore if locked or dragged by partner
                 return;
             }
             
             if (isRightClick) {
-                // Rotate whole group
+                // Rotate whole group (disabled as requested)
                 if (gameState.allowRotation) {
                     rotateGroup(clickedPiece.group, 1);
                     gameState.moveCount++;
@@ -1218,13 +1608,17 @@ window.addEventListener('DOMContentLoaded', () => {
                 gameState.lastBoardX = boardCoords.x;
                 gameState.lastBoardY = boardCoords.y;
                 
-                // Lift pieces to top of rendering order (reorder them)
-                // We do this by filtering out pieces in the group, and appending them to the end of the array
+                // Lift pieces to top of rendering order
                 const otherPieces = gameState.pieces.filter(p => !gameState.draggedGroup.includes(p));
                 gameState.pieces = [...otherPieces, ...gameState.draggedGroup];
+                
+                // Lock piece for partner
+                if (gameState.isMultiplayer) {
+                    sendPeerMessage({ type: 'lock', pieceId: clickedPiece.id });
+                }
             }
         } else {
-            // Clicked background -> Pan background if left clicking or right clicking
+            // Clicked background -> Pan background
             if (e.button === 0 || isRightClick) {
                 gameState.isPanning = true;
                 gameState.panStartMouseX = e.clientX;
@@ -1237,6 +1631,9 @@ window.addEventListener('DOMContentLoaded', () => {
         const mx = e.clientX - canvas.getBoundingClientRect().left;
         const my = e.clientY - canvas.getBoundingClientRect().top;
         
+        const boardCoords = screenToBoard(mx, my);
+        syncCursorPosition(boardCoords.x, boardCoords.y);
+        
         if (gameState.isPanning) {
             const dx = e.clientX - gameState.panStartMouseX;
             const dy = e.clientY - gameState.panStartMouseY;
@@ -1248,7 +1645,6 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         
         if (gameState.draggedGroup) {
-            const boardCoords = screenToBoard(mx, my);
             const dx = boardCoords.x - gameState.lastBoardX;
             const dy = boardCoords.y - gameState.lastBoardY;
             
@@ -1270,9 +1666,28 @@ window.addEventListener('DOMContentLoaded', () => {
         }
         
         if (gameState.draggedGroup) {
+            const groupToSync = gameState.draggedGroup;
+            const repPiece = groupToSync[0];
+            
             // Drop pieces -> trigger snap checking
             gameState.moveCount++;
-            checkGroupSnaps(gameState.draggedGroup);
+            checkGroupSnaps(groupToSync);
+            
+            // Sync final coordinates and release lock
+            if (gameState.isMultiplayer) {
+                sendPeerMessage({ type: 'release', pieceId: repPiece.id });
+                sendPeerMessage({
+                    type: 'sync_pieces',
+                    pieces: groupToSync.map(p => ({
+                        id: p.id,
+                        x: p.x,
+                        y: p.y,
+                        rotation: p.rotation,
+                        isLocked: p.isLocked
+                    }))
+                });
+            }
+            
             gameState.draggedGroup = null;
         }
     };
@@ -1330,6 +1745,10 @@ window.addEventListener('DOMContentLoaded', () => {
     
     // HUD HUD Action buttons bindings
     document.getElementById('back-to-menu-btn').addEventListener('click', () => {
+        if (gameState.isMultiplayer) {
+            cancelMultiplayerSession();
+            return;
+        }
         clearInterval(gameState.timerInterval);
         gameState.screen = 'setup';
         document.getElementById('game-screen').classList.remove('active');
@@ -1415,5 +1834,11 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     // Auto-parse URL parameters on load
-    parseURLParameters();
+    const loadParams = new URLSearchParams(window.location.search);
+    if (loadParams.has('room')) {
+        parseURLParameters();
+    } else {
+        // Solo url check
+        parseURLParameters();
+    }
 });
