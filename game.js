@@ -1114,6 +1114,13 @@ window.addEventListener('DOMContentLoaded', () => {
         
         if (gameState.imageType === 'procedural') {
             img.src = generateProceduralImage(gameState.imageValue, 1200, 800);
+        } else if (gameState.imageType === 'picsum') {
+            img.crossOrigin = "anonymous";
+            if (gameState.imageValue === 'lake') {
+                img.src = "https://picsum.photos/id/1015/1200/800";
+            } else {
+                img.src = "https://picsum.photos/1200/800?sig=" + Math.floor(Math.random() * 1000000);
+            }
         } else {
             img.src = gameState.imageValue;
         }
